@@ -1,0 +1,683 @@
+<!DOCTYPE html>
+<html lang="da">
+<head>
+<meta charset="UTF-8">
+<title>BMW 3D Driving Game</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #000; overflow: hidden; font-family: 'Arial', sans-serif; }
+  canvas { display: block; }
+  #hud {
+    position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+    pointer-events: none; z-index: 10;
+  }
+  #speedometer {
+    position: absolute; bottom: 30px; right: 40px;
+    background: rgba(0,0,0,0.7); border: 2px solid #1a6fc4;
+    border-radius: 50%; width: 130px; height: 130px;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    box-shadow: 0 0 20px rgba(26,111,196,0.5);
+  }
+  #speed-value { color: #fff; font-size: 36px; font-weight: bold; line-height: 1; }
+  #speed-unit { color: #1a6fc4; font-size: 13px; letter-spacing: 2px; margin-top: 2px; }
+  #gear-display {
+    position: absolute; bottom: 30px; right: 190px;
+    background: rgba(0,0,0,0.7); border: 2px solid #1a6fc4;
+    border-radius: 12px; padding: 10px 18px;
+    color: #fff; font-size: 28px; font-weight: bold;
+    box-shadow: 0 0 20px rgba(26,111,196,0.5);
+    text-align: center;
+  }
+  #gear-label { color: #1a6fc4; font-size: 11px; letter-spacing: 2px; }
+  #score-board {
+    position: absolute; top: 20px; left: 50%; transform: translateX(-50%);
+    background: rgba(0,0,0,0.7); border: 2px solid #1a6fc4;
+    border-radius: 12px; padding: 8px 28px;
+    color: #fff; font-size: 18px; text-align: center;
+    box-shadow: 0 0 20px rgba(26,111,196,0.5);
+  }
+  #score-board span { color: #1a6fc4; font-weight: bold; }
+  #bmw-logo {
+    position: absolute; top: 20px; left: 20px;
+    color: #fff; font-size: 22px; font-weight: bold;
+    letter-spacing: 3px; text-shadow: 0 0 10px rgba(26,111,196,0.8);
+  }
+  #bmw-logo em { color: #1a6fc4; font-style: normal; }
+  #controls-hint {
+    position: absolute; bottom: 30px; left: 30px;
+    background: rgba(0,0,0,0.6); border-radius: 10px;
+    padding: 10px 15px; color: #aaa; font-size: 13px;
+    line-height: 1.8;
+  }
+  #controls-hint strong { color: #1a6fc4; }
+  #rpm-bar-container {
+    position: absolute; bottom: 175px; right: 40px;
+    width: 220px;
+  }
+  #rpm-label { color: #888; font-size: 11px; letter-spacing: 2px; margin-bottom: 5px; text-align: right; }
+  #rpm-bar-bg {
+    height: 8px; background: rgba(255,255,255,0.1); border-radius: 4px; overflow: hidden;
+  }
+  #rpm-bar {
+    height: 100%; width: 0%; border-radius: 4px;
+    background: linear-gradient(90deg, #1a6fc4, #e74c3c);
+    transition: width 0.1s;
+  }
+  #crash-overlay {
+    position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+    background: rgba(255, 0, 0, 0); pointer-events: none;
+    transition: background 0.2s;
+  }
+  #view-toggle {
+    position: absolute; top: 20px; right: 20px;
+    background: rgba(0,0,0,0.7); border: 1px solid #1a6fc4;
+    border-radius: 8px; padding: 8px 14px;
+    color: #1a6fc4; font-size: 13px; pointer-events: all;
+    cursor: pointer;
+  }
+  #view-toggle:hover { background: rgba(26,111,196,0.3); }
+</style>
+</head>
+<body>
+<div id="hud">
+  <div id="bmw-logo"><em>BMW</em> M3</div>
+  <div id="score-board">Distance: <span id="dist-value">0</span> m &nbsp;|&nbsp; Best: <span id="best-value">0</span> m</div>
+  <button id="view-toggle" onclick="toggleView()">Skift Kamera [V]</button>
+  <div id="rpm-bar-container">
+    <div id="rpm-label">RPM</div>
+    <div id="rpm-bar-bg"><div id="rpm-bar"></div></div>
+  </div>
+  <div id="gear-display">
+    <div id="gear-value">1</div>
+    <div id="gear-label">GEAR</div>
+  </div>
+  <div id="speedometer">
+    <div id="speed-value">0</div>
+    <div id="speed-unit">KM/H</div>
+  </div>
+  <div id="controls-hint">
+    <strong>↑ / W</strong> — Gas<br>
+    <strong>↓ / S</strong> — Bremse<br>
+    <strong>← / →</strong> — Styr<br>
+    <strong>Space</strong> — Håndbremsedrift<br>
+    <strong>V</strong> — Skift kamera
+  </div>
+  <div id="crash-overlay"></div>
+</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+// ─── Scene setup ───────────────────────────────────────────────────────────
+const W = window.innerWidth, H = window.innerHeight;
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(W, H);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.setPixelRatio(window.devicePixelRatio);
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x87ceeb);
+scene.fog = new THREE.Fog(0x87ceeb, 80, 350);
+
+// Camera
+const camera = new THREE.PerspectiveCamera(65, W / H, 0.1, 600);
+let cameraMode = 0; // 0=third person, 1=cockpit, 2=hood
+
+// ─── Lighting ──────────────────────────────────────────────────────────────
+const ambient = new THREE.AmbientLight(0xffffff, 0.5);
+scene.add(ambient);
+const sun = new THREE.DirectionalLight(0xfff5e0, 1.2);
+sun.position.set(60, 100, 40);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+sun.shadow.camera.near = 1;
+sun.shadow.camera.far = 500;
+sun.shadow.camera.left = -100;
+sun.shadow.camera.right = 100;
+sun.shadow.camera.top = 100;
+sun.shadow.camera.bottom = -100;
+scene.add(sun);
+
+// ─── Road ──────────────────────────────────────────────────────────────────
+const ROAD_W = 14;
+const roadMat = new THREE.MeshLambertMaterial({ color: 0x333333 });
+const roadGeo = new THREE.PlaneGeometry(ROAD_W, 2000);
+const road = new THREE.Mesh(roadGeo, roadMat);
+road.rotation.x = -Math.PI / 2;
+road.receiveShadow = true;
+scene.add(road);
+
+// Road markings
+function makeLine(z) {
+  const g = new THREE.PlaneGeometry(0.22, 8);
+  const m = new THREE.MeshLambertMaterial({ color: 0xffffff });
+  const mesh = new THREE.Mesh(g, m);
+  mesh.rotation.x = -Math.PI / 2;
+  mesh.position.set(0, 0.01, z);
+  return mesh;
+}
+const lineGroup = new THREE.Group();
+for (let i = -100; i < 100; i++) lineGroup.add(makeLine(i * 12));
+scene.add(lineGroup);
+
+// Road edge lines
+function makeEdge(x, z) {
+  const g = new THREE.PlaneGeometry(0.15, 2400);
+  const m = new THREE.MeshLambertMaterial({ color: 0xffd700 });
+  const mesh = new THREE.Mesh(g, m);
+  mesh.rotation.x = -Math.PI / 2;
+  mesh.position.set(x, 0.011, z);
+  return mesh;
+}
+scene.add(makeEdge(-ROAD_W/2 + 0.4, 0));
+scene.add(makeEdge( ROAD_W/2 - 0.4, 0));
+
+// Ground beyond road
+const groundMat = new THREE.MeshLambertMaterial({ color: 0x4a7c4e });
+const groundGeo = new THREE.PlaneGeometry(800, 2400);
+const ground = new THREE.Mesh(groundGeo, groundMat);
+ground.rotation.x = -Math.PI / 2;
+ground.position.y = -0.01;
+ground.receiveShadow = true;
+scene.add(ground);
+
+// ─── BMW M3 Car ─────────────────────────────────────────────────────────────
+const carGroup = new THREE.Group();
+
+// Body colors
+const bodyMat   = new THREE.MeshPhongMaterial({ color: 0x1a1a2e, shininess: 200, specular: 0x6688cc });
+const bodyLow   = new THREE.MeshPhongMaterial({ color: 0x111122, shininess: 80 });
+const glassMat  = new THREE.MeshPhongMaterial({ color: 0x88aacc, transparent: true, opacity: 0.55, shininess: 300 });
+const chromeMat = new THREE.MeshPhongMaterial({ color: 0xcccccc, shininess: 500, specular: 0xffffff });
+const tireMat   = new THREE.MeshPhongMaterial({ color: 0x1a1a1a, shininess: 20 });
+const rimMat    = new THREE.MeshPhongMaterial({ color: 0xbbbbbb, shininess: 400, specular: 0xffffff });
+const lightMat  = new THREE.MeshPhongMaterial({ color: 0xffffcc, emissive: 0xffffaa, emissiveIntensity: 0.8 });
+const brakeMat  = new THREE.MeshPhongMaterial({ color: 0xff3300, emissive: 0xff1100, emissiveIntensity: 0.5 });
+const blackMat  = new THREE.MeshPhongMaterial({ color: 0x050505 });
+
+// Main body
+const bodyMain = new THREE.Mesh(new THREE.BoxGeometry(2.0, 0.55, 4.6), bodyMat);
+bodyMain.position.y = 0.62;
+carGroup.add(bodyMain);
+
+// Cabin roof
+const roofGeo = new THREE.BoxGeometry(1.82, 0.42, 2.1);
+const roof = new THREE.Mesh(roofGeo, bodyMat);
+roof.position.set(0, 1.06, -0.05);
+carGroup.add(roof);
+
+// Windshields
+const frontWind = new THREE.Mesh(new THREE.PlaneGeometry(1.75, 0.65), glassMat);
+frontWind.rotation.x = -Math.PI / 2 + 0.55;
+frontWind.position.set(0, 0.92, 1.0);
+carGroup.add(frontWind);
+const rearWind = new THREE.Mesh(new THREE.PlaneGeometry(1.75, 0.55), glassMat);
+rearWind.rotation.x = Math.PI / 2 + 0.5;
+rearWind.position.set(0, 0.92, -1.1);
+carGroup.add(rearWind);
+
+// Side windows
+[-0.91, 0.91].forEach(x => {
+  const sw = new THREE.Mesh(new THREE.PlaneGeometry(0.55, 0.35), glassMat);
+  sw.rotation.y = x > 0 ? Math.PI/2 : -Math.PI/2;
+  sw.position.set(x, 0.98, 0.3);
+  carGroup.add(sw);
+  const sw2 = new THREE.Mesh(new THREE.PlaneGeometry(0.45, 0.33), glassMat);
+  sw2.rotation.y = x > 0 ? Math.PI/2 : -Math.PI/2;
+  sw2.position.set(x, 0.97, -0.35);
+  carGroup.add(sw2);
+});
+
+// Hood (sloped front)
+const hoodGeo = new THREE.BoxGeometry(2.0, 0.12, 1.2);
+const hood = new THREE.Mesh(hoodGeo, bodyMat);
+hood.rotation.x = 0.12;
+hood.position.set(0, 0.78, 1.7);
+carGroup.add(hood);
+
+// Trunk
+const trunk = new THREE.Mesh(new THREE.BoxGeometry(2.0, 0.1, 0.8), bodyMat);
+trunk.rotation.x = -0.1;
+trunk.position.set(0, 0.77, -1.85);
+carGroup.add(trunk);
+
+// Front bumper
+const fBumper = new THREE.Mesh(new THREE.BoxGeometry(2.05, 0.38, 0.22), bodyLow);
+fBumper.position.set(0, 0.42, 2.35);
+carGroup.add(fBumper);
+
+// Kidney grille (BMW signature)
+[-0.38, 0.38].forEach(x => {
+  const grille = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.22, 0.08), blackMat);
+  grille.position.set(x, 0.55, 2.42);
+  carGroup.add(grille);
+  const border = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.26, 0.06), chromeMat);
+  border.position.set(x, 0.55, 2.41);
+  carGroup.add(border);
+});
+
+// Rear bumper
+const rBumper = new THREE.Mesh(new THREE.BoxGeometry(2.05, 0.38, 0.22), bodyLow);
+rBumper.position.set(0, 0.42, -2.35);
+carGroup.add(rBumper);
+
+// Headlights
+[-0.7, 0.7].forEach(x => {
+  const hl = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.18, 0.06), lightMat);
+  hl.position.set(x, 0.62, 2.43);
+  carGroup.add(hl);
+  // DRL stripe
+  const drl = new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.04, 0.04), lightMat);
+  drl.position.set(x, 0.73, 2.41);
+  carGroup.add(drl);
+});
+
+// Tail lights
+[-0.7, 0.7].forEach(x => {
+  const tl = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.14, 0.06), brakeMat);
+  tl.position.set(x, 0.62, -2.43);
+  carGroup.add(tl);
+});
+
+// Exhaust pipes
+[-0.35, 0.35].forEach(x => {
+  const exhaust = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.055, 0.15, 12), chromeMat);
+  exhaust.rotation.x = Math.PI/2;
+  exhaust.position.set(x, 0.28, -2.43);
+  carGroup.add(exhaust);
+});
+
+// Spoiler
+const spoiler = new THREE.Mesh(new THREE.BoxGeometry(1.9, 0.08, 0.28), bodyLow);
+spoiler.position.set(0, 1.08, -2.2);
+spoiler.rotation.x = -0.15;
+carGroup.add(spoiler);
+const spoilerL = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.14, 0.26), bodyLow);
+spoilerL.position.set(-0.92, 1.01, -2.2);
+carGroup.add(spoilerL);
+const spoilerR = spoilerL.clone();
+spoilerR.position.x = 0.92;
+carGroup.add(spoilerR);
+
+// Wheels
+const wheelPositions = [
+  [-0.98, 0.33,  1.5],
+  [ 0.98, 0.33,  1.5],
+  [-0.98, 0.33, -1.5],
+  [ 0.98, 0.33, -1.5],
+];
+const wheelMeshes = [];
+wheelPositions.forEach((pos, i) => {
+  const tireGeo = new THREE.CylinderGeometry(0.33, 0.33, 0.24, 20);
+  const tire = new THREE.Mesh(tireGeo, tireMat);
+  tire.rotation.z = Math.PI / 2;
+  tire.castShadow = true;
+  const rimGeo = new THREE.CylinderGeometry(0.20, 0.20, 0.25, 10);
+  const rim = new THREE.Mesh(rimGeo, rimMat);
+  rim.rotation.z = Math.PI / 2;
+  // Spokes
+  for (let s = 0; s < 5; s++) {
+    const spoke = new THREE.Mesh(new THREE.BoxGeometry(0.035, 0.26, 0.12), rimMat);
+    spoke.rotation.x = (s / 5) * Math.PI * 2;
+    spoke.position.set(0, 0, 0);
+    rim.add(spoke);
+  }
+  const wheelGroup = new THREE.Group();
+  wheelGroup.add(tire);
+  wheelGroup.add(rim);
+  wheelGroup.position.set(...pos);
+  carGroup.add(wheelGroup);
+  wheelMeshes.push(wheelGroup);
+});
+
+// Front car point light (headlights glow)
+const headLight = new THREE.SpotLight(0xfff5cc, 2.5, 60, Math.PI/7, 0.4);
+headLight.position.set(0, 0.7, 2.4);
+headLight.target.position.set(0, -0.5, 20);
+carGroup.add(headLight);
+carGroup.add(headLight.target);
+
+carGroup.position.set(0, 0, 0);
+carGroup.castShadow = true;
+scene.add(carGroup);
+
+// ─── Environment ───────────────────────────────────────────────────────────
+// Trees
+function makeTree(x, z) {
+  const g = new THREE.Group();
+  const trunk = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.15, 0.22, 2.2, 7),
+    new THREE.MeshLambertMaterial({ color: 0x5c3a1e })
+  );
+  trunk.position.y = 1.1;
+  trunk.castShadow = true;
+  g.add(trunk);
+  const colors = [0x2d6a2d, 0x1e5c1e, 0x3a7a3a];
+  [[0, 3.6, 0, 1.6, 2.8], [0, 4.8, 0, 1.1, 2.0], [0, 5.8, 0, 0.7, 1.5]].forEach(([px, py, pz, r, h], idx) => {
+    const top = new THREE.Mesh(
+      new THREE.ConeGeometry(r, h, 7),
+      new THREE.MeshLambertMaterial({ color: colors[idx % 3] })
+    );
+    top.position.set(px, py, pz);
+    top.castShadow = true;
+    g.add(top);
+  });
+  g.position.set(x, 0, z);
+  return g;
+}
+
+const treeGroup = new THREE.Group();
+for (let z = -100; z <= 100; z += 14) {
+  const jitter = (Math.random() - 0.5) * 4;
+  treeGroup.add(makeTree(-10 - Math.random() * 5, z * 2 + jitter));
+  treeGroup.add(makeTree( 10 + Math.random() * 5, z * 2 + jitter));
+  if (Math.random() > 0.5) {
+    treeGroup.add(makeTree(-14 - Math.random() * 6, z * 2 + jitter + 7));
+    treeGroup.add(makeTree( 14 + Math.random() * 6, z * 2 + jitter + 7));
+  }
+}
+scene.add(treeGroup);
+
+// Buildings in distance
+function makeBuilding(x, z) {
+  const h = 8 + Math.random() * 20;
+  const w = 4 + Math.random() * 6;
+  const d = 4 + Math.random() * 6;
+  const colors = [0x8899aa, 0x7788aa, 0x99aabb, 0x667788];
+  const b = new THREE.Mesh(
+    new THREE.BoxGeometry(w, h, d),
+    new THREE.MeshLambertMaterial({ color: colors[Math.floor(Math.random()*4)] })
+  );
+  b.position.set(x, h/2, z);
+  b.castShadow = true;
+  return b;
+}
+for (let i = 0; i < 30; i++) {
+  const side = Math.random() > 0.5 ? 1 : -1;
+  scene.add(makeBuilding(side * (25 + Math.random()*20), (Math.random()-0.5)*600));
+}
+
+// Mountains in background
+function makeMountain(x, z, s) {
+  const geo = new THREE.ConeGeometry(s, s * 0.8, 6);
+  const m = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ color: 0x6688aa }));
+  m.position.set(x, s * 0.4, z);
+  return m;
+}
+for (let i = 0; i < 16; i++) {
+  const side = i % 2 === 0 ? 1 : -1;
+  scene.add(makeMountain(side * (80 + Math.random()*80), (Math.random()-0.5)*800, 20 + Math.random()*30));
+}
+
+// Clouds
+function makeCloud(x, y, z) {
+  const g = new THREE.Group();
+  const mat = new THREE.MeshLambertMaterial({ color: 0xffffff, transparent: true, opacity: 0.88 });
+  [[0,0,0,3.5], [-2.5,0,0,2.5], [2.5,0,0,2.5], [0,1.2,0,2.2], [-1.5,0.8,0,1.8]].forEach(([cx,cy,cz,r]) => {
+    const sp = new THREE.Mesh(new THREE.SphereGeometry(r, 8, 6), mat);
+    sp.position.set(cx, cy, cz);
+    g.add(sp);
+  });
+  g.position.set(x, y, z);
+  return g;
+}
+const clouds = [];
+for (let i = 0; i < 12; i++) {
+  const c = makeCloud((Math.random()-0.5)*300, 60+Math.random()*30, (Math.random()-0.5)*500);
+  clouds.push(c);
+  scene.add(c);
+}
+
+// Guardrails
+function makeGuardrail(x, z, len) {
+  const g = new THREE.Group();
+  const railMat = new THREE.MeshLambertMaterial({ color: 0xaaaaaa });
+  const postMat = new THREE.MeshLambertMaterial({ color: 0x888888 });
+  const rail = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.1, len), railMat);
+  rail.position.set(0, 0.55, 0);
+  g.add(rail);
+  const steps = Math.floor(len / 4);
+  for (let i = 0; i <= steps; i++) {
+    const post = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.6, 0.08), postMat);
+    post.position.set(0, 0.3, -len/2 + i * 4);
+    g.add(post);
+  }
+  g.position.set(x, 0, z);
+  return g;
+}
+scene.add(makeGuardrail(-7.5, 0, 2400));
+scene.add(makeGuardrail( 7.5, 0, 2400));
+
+// ─── Car Physics ───────────────────────────────────────────────────────────
+let carPos = new THREE.Vector3(0, 0, 0);
+let carAngle = 0;
+let speed = 0;
+let steer = 0;
+let handbrake = false;
+let distance = 0;
+let bestDist = 0;
+
+const MAX_SPEED   = 55;
+const ACCEL       = 22;
+const BRAKE_F     = 38;
+const STEER_SPD   = 1.8;
+const DRAG        = 6;
+const GRIP        = 5;
+const HANDBRAKE_D = 0.7;
+
+const keys = {};
+window.addEventListener('keydown', e => { keys[e.code] = true; });
+window.addEventListener('keyup',   e => { keys[e.code] = false; });
+window.addEventListener('keydown', e => {
+  if (e.code === 'KeyV') toggleView();
+  if (e.code === 'Space') e.preventDefault();
+});
+
+function toggleView() {
+  cameraMode = (cameraMode + 1) % 3;
+  const labels = ['3. Person', 'Cockpit', 'Motorhjelm'];
+  document.getElementById('view-toggle').textContent = 'Kamera: ' + labels[cameraMode] + ' [V]';
+}
+
+// Obstacle system
+const obstacles = [];
+const obstGeo = new THREE.BoxGeometry(1.6, 1.4, 3.8);
+const obstMats = [
+  new THREE.MeshPhongMaterial({ color: 0xcc2222 }),
+  new THREE.MeshPhongMaterial({ color: 0x2255cc }),
+  new THREE.MeshPhongMaterial({ color: 0x22aa55 }),
+  new THREE.MeshPhongMaterial({ color: 0xccaa22 }),
+];
+for (let i = 0; i < 8; i++) {
+  const m = new THREE.Mesh(obstGeo, obstMats[i % obstMats.length]);
+  m.position.set((Math.random()-0.5)*8, 0.7, -200 - i * 100);
+  m.castShadow = true;
+  obstacles.push(m);
+  scene.add(m);
+}
+
+let flashTimer = 0;
+let crashBlink = 0;
+
+// ─── HUD elements ──────────────────────────────────────────────────────────
+const speedEl   = document.getElementById('speed-value');
+const gearEl    = document.getElementById('gear-value');
+const rpmBar    = document.getElementById('rpm-bar');
+const distEl    = document.getElementById('dist-value');
+const bestEl    = document.getElementById('best-value');
+const crashEl   = document.getElementById('crash-overlay');
+
+// ─── Game loop ─────────────────────────────────────────────────────────────
+let lastTime = performance.now();
+
+function getGear(spd) {
+  if (spd < 0) return 'R';
+  if (spd < 8)  return '1';
+  if (spd < 18) return '2';
+  if (spd < 28) return '3';
+  if (spd < 38) return '4';
+  if (spd < 48) return '5';
+  return '6';
+}
+
+function animate() {
+  requestAnimationFrame(animate);
+  const now = performance.now();
+  const dt = Math.min((now - lastTime) / 1000, 0.05);
+  lastTime = now;
+
+  // Input
+  const gas   = keys['ArrowUp']    || keys['KeyW'];
+  const brake  = keys['ArrowDown']  || keys['KeyS'];
+  const left   = keys['ArrowLeft']  || keys['KeyA'];
+  const right  = keys['ArrowRight'] || keys['KeyD'];
+  handbrake    = keys['Space'] || false;
+
+  // Steer
+  let targetSteer = 0;
+  if (left)  targetSteer = -1;
+  if (right) targetSteer =  1;
+  steer += (targetSteer - steer) * GRIP * dt;
+
+  // Speed
+  if (gas)   speed += ACCEL * dt;
+  if (brake) speed -= BRAKE_F * dt;
+  if (!gas && !brake) speed -= DRAG * dt * Math.sign(speed);
+  if (handbrake) speed *= (1 - HANDBRAKE_D * dt * 8);
+  speed = Math.max(-8, Math.min(MAX_SPEED, speed));
+
+  // Turn
+  if (Math.abs(speed) > 0.5) {
+    const turnRate = steer * STEER_SPD * (1 - Math.abs(speed)/MAX_SPEED * 0.4) * dt;
+    carAngle -= turnRate * Math.sign(speed);
+  }
+
+  // Move
+  const fwd = new THREE.Vector3(Math.sin(carAngle), 0, Math.cos(carAngle));
+  carPos.addScaledVector(fwd, speed * dt);
+
+  // Road clamp
+  carPos.x = Math.max(-ROAD_W/2 + 1.2, Math.min(ROAD_W/2 - 1.2, carPos.x));
+
+  // Distance
+  if (speed > 0) {
+    distance += speed * dt;
+    if (distance > bestDist) bestDist = distance;
+  }
+
+  // Update car mesh
+  carGroup.position.copy(carPos);
+  carGroup.position.y = 0;
+  carGroup.rotation.y = carAngle;
+
+  // Wheel spin
+  const spinRate = speed * 1.5 * dt;
+  wheelMeshes.forEach((w, i) => {
+    w.children.forEach(c => c.rotation.x += spinRate);
+  });
+  // Front wheel steer
+  wheelMeshes[0].rotation.y = steer * 0.45;
+  wheelMeshes[1].rotation.y = steer * 0.45;
+
+  // Scroll road lines
+  lineGroup.children.forEach(l => {
+    l.position.z = ((l.position.z - carPos.z + 600) % 1200) - 600 + carPos.z;
+  });
+
+  // Move obstacles with world (recycle when behind camera)
+  obstacles.forEach(ob => {
+    if (ob.position.z > carPos.z + 30) {
+      ob.position.z -= 900;
+      ob.position.x = (Math.random()-0.5) * 8;
+    }
+  });
+
+  // Collision detection
+  const carBB = new THREE.Box3();
+  carBB.setFromCenterAndSize(carPos.clone().setY(0.7), new THREE.Vector3(1.8, 1.4, 4.2));
+  obstacles.forEach(ob => {
+    const obBB = new THREE.Box3().setFromObject(ob);
+    if (carBB.intersectsBox(obBB)) {
+      speed *= -0.4;
+      flashTimer = 0.3;
+    }
+  });
+
+  // Crash flash
+  if (flashTimer > 0) {
+    flashTimer -= dt;
+    crashEl.style.background = `rgba(255,0,0,${0.35 * (flashTimer/0.3)})`;
+  } else {
+    crashEl.style.background = 'rgba(255,0,0,0)';
+  }
+
+  // Camera
+  const kmh = Math.abs(speed) * 3.6;
+  updateCamera(dt, fwd);
+
+  // Clouds drift
+  clouds.forEach((c, i) => {
+    c.position.x += 0.8 * dt * (i % 2 === 0 ? 1 : -1);
+    if (c.position.x > 200) c.position.x = -200;
+    if (c.position.x < -200) c.position.x = 200;
+  });
+
+  // HUD
+  speedEl.textContent = Math.round(kmh);
+  gearEl.textContent  = getGear(speed);
+  rpmBar.style.width  = Math.min(100, (Math.abs(speed) / MAX_SPEED) * 100) + '%';
+  distEl.textContent  = Math.round(distance);
+  bestEl.textContent  = Math.round(bestDist);
+
+  renderer.render(scene, camera);
+}
+
+function updateCamera(dt, fwd) {
+  if (cameraMode === 0) {
+    // Third person
+    const offset = new THREE.Vector3(-Math.sin(carAngle) * 10, 5.5, -Math.cos(carAngle) * 10);
+    const target = carPos.clone().add(offset);
+    camera.position.lerp(target, 6 * dt);
+    camera.lookAt(carPos.clone().setY(1));
+  } else if (cameraMode === 1) {
+    // Cockpit
+    const offset = new THREE.Vector3(
+      carPos.x + Math.sin(carAngle) * 0.3,
+      carPos.y + 1.15,
+      carPos.z + Math.cos(carAngle) * 0.3
+    );
+    camera.position.copy(offset);
+    const lookAt = new THREE.Vector3(
+      carPos.x + Math.sin(carAngle) * 12,
+      carPos.y + 0.9,
+      carPos.z + Math.cos(carAngle) * 12
+    );
+    camera.lookAt(lookAt);
+  } else {
+    // Hood cam
+    const offset = new THREE.Vector3(
+      carPos.x + Math.sin(carAngle) * 2.2,
+      carPos.y + 0.78,
+      carPos.z + Math.cos(carAngle) * 2.2
+    );
+    camera.position.copy(offset);
+    const lookAt = new THREE.Vector3(
+      carPos.x + Math.sin(carAngle) * 20,
+      carPos.y + 0.4,
+      carPos.z + Math.cos(carAngle) * 20
+    );
+    camera.lookAt(lookAt);
+  }
+}
+
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+animate();
+</script>
+</body>
+</html>
